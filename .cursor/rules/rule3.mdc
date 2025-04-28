@@ -1,0 +1,7 @@
+---
+description: 
+globs: **/*.ts
+alwaysApply: false
+---
+- Use TypeScript for all new code.
+- Maintain consistent code style across all TypeScript files.

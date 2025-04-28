@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Navbar from '../../components/Navbar';
 import { useWeb3 } from '../../context/Web3Context';
-import { ethers } from 'ethers';
+import { ethers, parseEther } from 'ethers';
 
 enum SupplySource {
     LOCAL_PRODUCER = 0,
@@ -45,7 +45,7 @@ export default function RegisterRestaurant() {
         setError('');
 
         try {
-            const depositInWei = ethers.utils.parseEther(depositAmount);
+            const depositInWei = parseEther(depositAmount);
             const tx = await contract.registerRestaurant(
                 supplySource,
                 supplyDetails,

@@ -30,7 +30,7 @@ export default function Profile() {
         try {
             // Fetch carbon credits
             const credits = await contract.getCustomerCarbonCredits();
-            setCarbonCredits(credits.toNumber());
+            setCarbonCredits(Number(credits));
 
             // Fetch token balance
             const balance = await contract.getCustomerTokenBalance();
