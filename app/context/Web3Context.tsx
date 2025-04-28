@@ -3,7 +3,7 @@
 import React from 'react';
 import { useState, useEffect } from 'react';
 import { createContext, useContext } from 'react';
-
+import { ethers } from 'ethers';
 // Add type definitions for Window ethereum
 declare global {
     interface Window {
@@ -1290,11 +1290,8 @@ export function Web3Provider({ children }: { children: React.ReactNode }) {
             const connectedAccount = accounts[0];
             console.log("Connected account:", connectedAccount);
 
-            // Dynamically import ethers
-            const ethers = await import('ethers');
-
             // Create provider
-            const provider = new ethers.providers.Web3Provider(window.ethereum);
+            const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = provider.getSigner();
 
             // Create contract instance
