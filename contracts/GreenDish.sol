@@ -9,22 +9,20 @@ contract GreenDish {
     // =============== STATE VARIABLES =============== //
     address public owner;
     uint public entryFee;
-    uint public restaurantDeposit = 10 ether;
     uint public dishCounter;
+    bool private _locked;
+
     // Max purchases to track per customer
-    uint constant MAX_PURCHASES_TRACKED = 100;
     mapping(uint => Dish) public dishes;
     mapping(address => uint[]) public restaurantDishes;
-    mapping(address => uint) public restaurantDeposits;
     mapping(address => bool) public verifiedRestaurants;
     mapping(address => RestaurantInfo) public restaurantInfo;
     mapping(uint => DishRatingInfo) public dishRatings;
-    mapping(uint => mapping(address => Rating)) public userRatings;
-    // CustomerProfile struct and mapping is redundant with our new tracking system
+    // Store ratings per transaction instead of per dish/user
+    mapping(address => mapping(uint => Rating)) public transactionRatings; // user -> transactionIndex -> Rating
     mapping(address => uint) public customerCarbonCredits;
     mapping(address => mapping(uint => Transaction)) public userTransactions;
     mapping(address => uint) public userTransactionCount;
-    mapping(address => mapping(uint => bool)) public purchasedDishes;
 
     // Token Variables
     string public name = "GreenCoin";
@@ -46,7 +44,6 @@ contract GreenDish {
     struct RestaurantInfo {
         SupplySource supplySource;
         string supplyDetails;
-        bool isRegistered;
     }
 
     struct Dish {
@@ -63,7 +60,6 @@ contract GreenDish {
         uint score; // 1-5 rating
         string comment;
         uint timestamp;
-        bool rewarded;
     }
 
     struct DishRatingInfo {
@@ -82,6 +78,9 @@ contract GreenDish {
         uint timestamp;
         uint carbonCredits;
         uint price;
+        bool rated;
+        bool ratingRewarded;
+        bool purchaseRewarded;
     }
 
     // =============== EVENTS =============== //
@@ -91,7 +90,11 @@ contract GreenDish {
         string name
     );
     event DishPurchased(uint indexed dishId, address indexed customer);
-    event RewardIssued(address indexed customer, uint amount);
+    event PurchaseRewarded(
+        uint indexed dishId,
+        address indexed customer,
+        uint reward
+    );
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(
         address indexed owner,
@@ -112,7 +115,7 @@ contract GreenDish {
         uint indexed dishId,
         address indexed restaurant,
         bool isActive,
-        SupplySource supplySource
+        uint price
     );
 
     // =============== CONSTRUCTOR =============== //
@@ -150,12 +153,11 @@ contract GreenDish {
         _;
     }
 
-    modifier hasPurchasedDish(uint _dishId) {
-        require(
-            purchasedDishes[msg.sender][_dishId],
-            "Must purchase dish before rating"
-        );
+    modifier nonReentrant() {
+        require(!_locked, "ReentrancyGuard: reentrant call");
+        _locked = true;
         _;
+        _locked = false;
     }
 
     // =============== RESTAURANT FUNCTIONS =============== //
@@ -163,17 +165,16 @@ contract GreenDish {
         SupplySource _supplySource,
         string memory _supplyDetails
     ) external payable {
-        require(!verifiedRestaurants[msg.sender], "Already verified");
-        require(msg.value >= restaurantDeposit, "Low deposit");
+        require(
+            !verifiedRestaurants[msg.sender],
+            "Restaurant already registered"
+        );
+        require(msg.value >= entryFee, "Insufficient registration fee");
         require(bytes(_supplyDetails).length > 0, "Supply details required");
-
         verifiedRestaurants[msg.sender] = true;
-        restaurantDeposits[msg.sender] += msg.value;
-
         restaurantInfo[msg.sender] = RestaurantInfo({
             supplySource: _supplySource,
-            supplyDetails: _supplyDetails,
-            isRegistered: true
+            supplyDetails: _supplyDetails
         });
 
         emit RestaurantRegistered(msg.sender, _supplySource);
@@ -188,7 +189,7 @@ contract GreenDish {
         require(bytes(_name).length > 0, "Name required");
         require(bytes(_mainComponent).length > 0, "Main component required");
         require(_price > 0, "Price must be greater than 0");
-        require(_carbonCredits <= 100, "Invalid credits");
+        require(_carbonCredits > 0 && _carbonCredits <= 100, "Invalid credits");
 
         dishCounter++;
         uint dishId = dishCounter;
@@ -217,33 +218,14 @@ contract GreenDish {
 
     function updateDish(
         uint _dishId,
-        string memory _name,
-        string memory _mainComponent,
-        uint _carbonCredits,
         uint _price,
-        bool _isActive,
-        SupplySource _supplySource,
-        string memory _supplyDetails
+        bool _isActive
     ) external onlyDishOwner(_dishId) {
-        require(_carbonCredits <= 100, "Invalid credits");
-        require(bytes(_supplyDetails).length > 0, "Supply details required");
-        require(bytes(_name).length > 0, "Name required");
-        require(bytes(_mainComponent).length > 0, "Main component required");
-        require(_price > 0, "Price must be greater than 0");
-
         Dish storage dish = dishes[_dishId];
-        dish.name = _name;
-        dish.mainComponent = _mainComponent;
-        dish.carbonCredits = _carbonCredits;
         dish.price = _price;
         dish.isActive = _isActive;
 
-        // Update restaurant supply info
-        restaurantInfo[msg.sender].supplySource = _supplySource;
-        restaurantInfo[msg.sender].supplyDetails = _supplyDetails;
-
-        // Emit event for dish update
-        emit DishUpdated(_dishId, msg.sender, _isActive, _supplySource);
+        emit DishUpdated(_dishId, msg.sender, _isActive, _price);
     }
 
     function getRestaurantInfo(
@@ -253,24 +235,37 @@ contract GreenDish {
     }
 
     // =============== CUSTOMER FUNCTIONS =============== //
-    function getDishes() external view returns (uint[] memory) {
+
+    function getDishes(
+        uint startIndex,
+        uint count
+    ) external view returns (uint[] memory) {
+        // Ensure we don't read past the end
+        uint endIndex = (startIndex + count > dishCounter)
+            ? dishCounter
+            : startIndex + count;
+
+        // First determine how many active dishes in the requested range
         uint activeCount = 0;
-        for (uint i = 1; i <= dishCounter; i++) {
-            if (dishes[i].isActive) {
+        for (uint i = startIndex; i <= endIndex; i++) {
+            if (i > 0 && dishes[i].isActive) {
                 activeCount++;
             }
         }
 
-        uint[] memory activeDishes = new uint[](activeCount);
-        uint index = 0;
-        for (uint i = 1; i <= dishCounter; i++) {
-            if (dishes[i].isActive) {
-                activeDishes[index] = i;
-                index++;
+        // Create result array of the right size
+        uint[] memory result = new uint[](activeCount);
+
+        // Fill array with active dish IDs
+        uint resultIndex = 0;
+        for (uint i = startIndex; i <= endIndex; i++) {
+            if (i > 0 && dishes[i].isActive) {
+                result[resultIndex] = i;
+                resultIndex++;
             }
         }
 
-        return activeDishes;
+        return result;
     }
 
     function getDishDetails(
@@ -279,39 +274,82 @@ contract GreenDish {
         return dishes[_dishId];
     }
 
-    function purchaseDishWithEth(
+    function purchaseDish(
         uint _dishId
-    ) external payable validDish(_dishId) {
+    ) external payable nonReentrant validDish(_dishId) {
         Dish storage dish = dishes[_dishId];
-        require(dish.isActive, "Not active");
-        require(dish.isVerified, "Not verified");
-        require(msg.value >= dish.price, "Low payment");
+        require(dish.isActive, "This dish is not currently available");
+        require(dish.isVerified, "This dish is not verified");
+        require(msg.value == dish.price, "Wrong payment amount");
 
-        // Process purchase first (state changes)
-        _processPurchase(_dishId, dish.price);
+        require(
+            msg.sender != dish.restaurant,
+            "Restaurant cannot purchase own dish"
+        );
 
-        // Transfer ETH after all state changes (prevents reentrancy)
-        payable(dish.restaurant).transfer(dish.price);
+        address restaurantAddress = dish.restaurant;
+        payable(restaurantAddress).transfer(msg.value);
 
-        // Return excess payment
-        if (msg.value > dish.price) {
-            payable(msg.sender).transfer(msg.value - dish.price);
+        // Then do all state modifications
+        uint carbonCredits = dish.carbonCredits;
+        uint purchaseReward = (carbonCredits * 10 ** uint256(decimals)) / 10;
+        bool canReward = (purchaseReward > 0 &&
+            balances[address(this)] >= purchaseReward);
+
+        // Process state changes
+        uint txIndex = userTransactionCount[msg.sender];
+
+        // Create the transaction record with the appropriate initial reward status
+        userTransactions[msg.sender][txIndex] = Transaction({
+            dishId: _dishId,
+            timestamp: block.timestamp,
+            carbonCredits: carbonCredits,
+            price: dish.price,
+            rated: false,
+            ratingRewarded: false,
+            purchaseRewarded: false // Initially set to false, will update if reward is processed
+        });
+
+        userTransactionCount[msg.sender]++;
+
+        // Update customer carbon credits
+        customerCarbonCredits[msg.sender] += carbonCredits;
+
+        // First the purchase event
+        emit DishPurchased(_dishId, msg.sender);
+
+        // Then if applicable, the reward event
+        if (canReward) {
+            _transfer(address(this), msg.sender, purchaseReward);
+            userTransactions[msg.sender][txIndex].purchaseRewarded = true;
+            emit PurchaseRewarded(_dishId, msg.sender, purchaseReward);
         }
     }
 
     function rateDish(
         uint _dishId,
         uint _score,
-        string memory _comment
-    ) external hasPurchasedDish(_dishId) validDish(_dishId) {
+        string memory _comment,
+        uint _transactionIndex
+    ) external validDish(_dishId) {
         require(_score >= 1 && _score <= 5, "Score must be 1-5");
+        require(
+            _transactionIndex < userTransactionCount[msg.sender],
+            "Invalid transaction index"
+        );
+        require(bytes(_comment).length <= 200, "Comment too long");
 
-        // Record the rating
-        userRatings[_dishId][msg.sender] = Rating({
+        Transaction storage userTx = userTransactions[msg.sender][
+            _transactionIndex
+        ];
+
+        require(userTx.dishId == _dishId, "Transaction not for this dish");
+        require(!userTx.rated, "Transaction already rated");
+
+        transactionRatings[msg.sender][_transactionIndex] = Rating({
             score: _score,
             comment: _comment,
-            timestamp: block.timestamp,
-            rewarded: false
+            timestamp: block.timestamp
         });
 
         // Update dish rating stats
@@ -319,79 +357,46 @@ contract GreenDish {
         ratings.totalRatings++;
         ratings.ratingSum += _score;
 
+        // Mark the transaction as rated
+        userTx.rated = true;
+
         emit DishRated(_dishId, msg.sender, _score);
 
-        // Reward user with half of what they received in their purchase
-        _rewardForRating(_dishId, msg.sender);
+        // Process reward for the rating - pass userTx directly to avoid loading it again
+        _processRatingReward(_dishId, msg.sender, userTx);
     }
 
-    function _rewardForRating(uint _dishId, address _rater) internal {
-        // Only reward if not already rewarded
-        Rating storage userRating = userRatings[_dishId][_rater];
-        if (userRating.rewarded) return;
+    function _processRatingReward(
+        uint _dishId,
+        address _rater,
+        Transaction storage userTx
+    ) internal {
+        // Only reward if rating hasn't been rewarded yet
+        require(!userTx.ratingRewarded, "Rating already rewarded");
 
-        // Find the user's transaction for this dish to calculate the reward
-        Transaction memory userTx;
-        bool foundTx = false;
-        uint txCount = userTransactionCount[_rater];
+        uint _carbonCredits = userTx.carbonCredits;
 
-        for (uint i = 0; i < txCount; i++) {
-            if (userTransactions[_rater][i].dishId == _dishId) {
-                userTx = userTransactions[_rater][i];
-                foundTx = true;
-                break;
-            }
-        }
+        // Calculate rating reward - 5% of carbon credits (0.05 tokens per credit)
+        uint ratingReward = (_carbonCredits * 10 ** uint256(decimals)) / 20; // 0.05 tokens per credit
 
-        if (!foundTx) return;
+        // Check contract has sufficient balance
+        require(
+            ratingReward > 0 && balances[address(this)] >= ratingReward,
+            "Insufficient reward funds"
+        );
 
-        // Calculate reward as half of what they received for purchase
-        uint carbonCredits = userTx.carbonCredits;
-        uint purchaseReward = (carbonCredits * 10 ** uint256(decimals)) / 10; // 0.1 tokens per credit
-        uint ratingReward = purchaseReward / 2; // Half of the purchase reward
+        // Process the reward
+        _transfer(address(this), _rater, ratingReward);
 
-        // Check available balance and total supply before issuing rewards
-        if (ratingReward > 0 && balances[address(this)] >= ratingReward) {
-            _transfer(address(this), _rater, ratingReward);
-            userRating.rewarded = true;
+        // Mark this transaction's rating as rewarded
+        userTx.ratingRewarded = true;
 
-            // Update stats
-            DishRatingInfo storage ratings = dishRatings[_dishId];
-            ratings.rewardedRatings++;
+        // Update reward stats
+        DishRatingInfo storage ratings = dishRatings[_dishId];
+        ratings.rewardedRatings++;
 
-            emit RatingRewarded(_dishId, _rater, ratingReward);
-        }
-    }
-
-    function _processPurchase(uint _dishId, uint _price) internal {
-        Dish storage dish = dishes[_dishId];
-
-        // Create transaction record
-        uint txIndex = userTransactionCount[msg.sender];
-        userTransactions[msg.sender][txIndex] = Transaction({
-            dishId: _dishId,
-            timestamp: block.timestamp,
-            carbonCredits: dish.carbonCredits,
-            price: _price
-        });
-
-        // Increment transaction count
-        userTransactionCount[msg.sender]++;
-
-        // Update carbon credits
-        customerCarbonCredits[msg.sender] += dish.carbonCredits;
-
-        // Also track which dishes were purchased for rating eligibility
-        purchasedDishes[msg.sender][_dishId] = true;
-
-        // Award tokens
-        uint tokenReward = (dish.carbonCredits * 10 ** uint256(decimals)) / 10;
-        if (tokenReward > 0 && balances[address(this)] >= tokenReward) {
-            _transfer(address(this), msg.sender, tokenReward);
-            emit RewardIssued(msg.sender, tokenReward);
-        }
-
-        emit DishPurchased(_dishId, msg.sender);
+        // Emit the rating reward event
+        emit RatingRewarded(_dishId, _rater, ratingReward);
     }
 
     function getCustomerProfile()
@@ -442,19 +447,60 @@ contract GreenDish {
 
     function getDishRating(
         uint _dishId
-    ) external view validDish(_dishId) returns (uint, uint) {
+    ) external view validDish(_dishId) returns (uint, uint, uint) {
         DishRatingInfo storage ratings = dishRatings[_dishId];
         if (ratings.totalRatings == 0) {
-            return (0, 0);
+            return (0, 0, 0); // Return (whole number part, total ratings, rating with 1 decimal)
         }
-        return (ratings.ratingSum / ratings.totalRatings, ratings.totalRatings);
+
+        // Calculate average with one decimal place (multiply by 10 first, then divide)
+        uint ratingWithDecimal = (ratings.ratingSum * 10) /
+            ratings.totalRatings;
+
+        // Extract the whole number part (integer division)
+        uint wholeNumber = ratingWithDecimal / 10;
+
+        return (wholeNumber, ratings.totalRatings, ratingWithDecimal);
     }
 
-    function getUserRating(
-        uint _dishId,
-        address _user
-    ) external view returns (Rating memory) {
-        return userRatings[_dishId][_user];
+    function getUserDishRatings(
+        address _user,
+        uint _dishId
+    )
+        external
+        view
+        validDish(_dishId)
+        returns (uint[] memory transactionIndices, Rating[] memory ratings)
+    {
+        uint txCount = userTransactionCount[_user];
+
+        // First count the number of rated transactions for this dish
+        uint ratedCount = 0;
+        for (uint i = 0; i < txCount; i++) {
+            Transaction memory userTx = userTransactions[_user][i];
+            if (userTx.dishId == _dishId && userTx.rated) {
+                ratedCount++;
+            }
+        }
+
+        // Create arrays of the right size
+        transactionIndices = new uint[](ratedCount);
+        ratings = new Rating[](ratedCount);
+
+        // Fill the arrays
+        if (ratedCount > 0) {
+            uint resultIndex = 0;
+            for (uint i = 0; i < txCount; i++) {
+                Transaction memory userTx = userTransactions[_user][i];
+                if (userTx.dishId == _dishId && userTx.rated) {
+                    transactionIndices[resultIndex] = i;
+                    ratings[resultIndex] = transactionRatings[_user][i];
+                    resultIndex++;
+                }
+            }
+        }
+
+        return (transactionIndices, ratings);
     }
 
     // =============== ADMIN FUNCTIONS =============== //

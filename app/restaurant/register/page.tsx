@@ -45,18 +45,128 @@ export default function RegisterRestaurant() {
         setError('');
 
         try {
+            // Get network information to verify connection
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const network = await provider.getNetwork();
+            console.log("Connected to network:", {
+                chainId: network.chainId.toString(),
+                name: network.name
+            });
+
+            // Check wallet balance
+            const signer = await provider.getSigner();
+            const balance = await provider.getBalance(await signer.getAddress());
+            const balanceInEth = Number(ethers.formatEther(balance));
+            console.log("Wallet balance:", balanceInEth, "ETH");
+
+            // Check if balance is sufficient (10 ETH deposit + estimated gas)
+            if (balanceInEth < 10.1) {
+                setError(`Insufficient balance: You have ${balanceInEth.toFixed(2)} ETH but need at least 10.1 ETH (10 ETH deposit + gas)`);
+                setLoading(false);
+                return;
+            }
+
             const depositInWei = parseEther(depositAmount);
-            const tx = await contract.registerRestaurant(
+            console.log("Registering restaurant with:", {
                 supplySource,
                 supplyDetails,
-                { value: depositInWei }
-            );
+                value: depositInWei.toString()
+            });
 
-            await tx.wait();
-            setRegistrationComplete(true);
+            // Check if the contract is properly connected
+            try {
+                // Make a simple call to a view function to verify contract connection
+                const isVerified = await contract.verifiedRestaurants(account);
+                console.log("Restaurant verification status:", isVerified);
+
+                if (isVerified) {
+                    setError("This wallet is already registered as a restaurant");
+                    setLoading(false);
+                    return;
+                }
+            } catch (err: any) {
+                console.error("Error checking restaurant status:", err);
+                setError(`Contract connection error: ${err.message || 'Unable to connect to contract'}`);
+                setLoading(false);
+                return;
+            }
+
+            // Try with different gas settings
+            try {
+                const tx = await contract.registerRestaurant(
+                    supplySource,
+                    supplyDetails,
+                    {
+                        value: depositInWei,
+                        gasLimit: 1000000 // Increase gas limit significantly
+                    }
+                );
+
+                console.log("Transaction sent:", tx.hash);
+
+                // Wait for transaction confirmation with timeout
+                const receipt = await Promise.race([
+                    tx.wait(),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error("Transaction confirmation timeout")), 60000)
+                    )
+                ]);
+
+                console.log("Transaction confirmed:", receipt);
+                setRegistrationComplete(true);
+            } catch (txError: any) {
+                if (txError.code === 'ACTION_REJECTED') {
+                    setError('Transaction was rejected by user');
+                } else {
+                    // Try a different approach if first attempt failed
+                    console.error("First transaction attempt failed:", txError);
+                    setError(`Transaction failed: ${txError.message}. Trying alternative method...`);
+
+                    // Try a direct transaction through the signer
+                    try {
+                        // Create contract with signer
+                        const contract2 = new ethers.Contract(
+                            contract.target, // Use the contract address
+                            contract.interface, // Use the existing ABI
+                            signer
+                        );
+
+                        const tx2 = await contract2.registerRestaurant(
+                            supplySource,
+                            supplyDetails,
+                            {
+                                value: depositInWei,
+                                gasLimit: 1000000
+                            }
+                        );
+
+                        console.log("Second transaction attempt sent:", tx2.hash);
+                        await tx2.wait();
+                        console.log("Second transaction confirmed");
+                        setRegistrationComplete(true);
+                        setError(''); // Clear error if second attempt succeeds
+                    } catch (tx2Error: any) {
+                        console.error("Second transaction attempt failed:", tx2Error);
+                        if (tx2Error.code === 'ACTION_REJECTED') {
+                            setError('Transaction was rejected by user');
+                        } else {
+                            setError(`All transaction attempts failed. Please contact support. Error: ${tx2Error.message}`);
+                        }
+                    }
+                }
+            }
         } catch (error: any) {
             console.error('Error registering restaurant:', error);
-            setError(error.message || 'Registration failed');
+            // Provide more detailed error information
+            if (error.code) {
+                console.error('Error code:', error.code);
+            }
+            if (error.reason) {
+                console.error('Error reason:', error.reason);
+                setError(`Registration failed: ${error.reason}`);
+            } else {
+                setError(error.message || 'Registration failed');
+            }
         } finally {
             setLoading(false);
         }

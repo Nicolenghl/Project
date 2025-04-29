@@ -156,9 +156,9 @@
 			},
 			{
 				"indexed": false,
-				"internalType": "enum GreenDish.SupplySource",
-				"name": "supplySource",
-				"type": "uint8"
+				"internalType": "uint256",
+				"name": "price",
+				"type": "uint256"
 			}
 		],
 		"name": "DishUpdated",
@@ -172,10 +172,35 @@
 				"type": "uint256"
 			}
 		],
-		"name": "purchaseDishWithEth",
+		"name": "purchaseDish",
 		"outputs": [],
 		"stateMutability": "payable",
 		"type": "function"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "uint256",
+				"name": "dishId",
+				"type": "uint256"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "customer",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "reward",
+				"type": "uint256"
+			}
+		],
+		"name": "PurchaseRewarded",
+		"type": "event"
 	},
 	{
 		"inputs": [
@@ -193,6 +218,11 @@
 				"internalType": "string",
 				"name": "_comment",
 				"type": "string"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_transactionIndex",
+				"type": "uint256"
 			}
 		],
 		"name": "rateDish",
@@ -288,25 +318,6 @@
 			}
 		],
 		"name": "RestaurantRegistered",
-		"type": "event"
-	},
-	{
-		"anonymous": false,
-		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "customer",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
-		],
-		"name": "RewardIssued",
 		"type": "event"
 	},
 	{
@@ -412,21 +423,6 @@
 				"type": "uint256"
 			},
 			{
-				"internalType": "string",
-				"name": "_name",
-				"type": "string"
-			},
-			{
-				"internalType": "string",
-				"name": "_mainComponent",
-				"type": "string"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_carbonCredits",
-				"type": "uint256"
-			},
-			{
 				"internalType": "uint256",
 				"name": "_price",
 				"type": "uint256"
@@ -435,16 +431,6 @@
 				"internalType": "bool",
 				"name": "_isActive",
 				"type": "bool"
-			},
-			{
-				"internalType": "enum GreenDish.SupplySource",
-				"name": "_supplySource",
-				"type": "uint8"
-			},
-			{
-				"internalType": "string",
-				"name": "_supplyDetails",
-				"type": "string"
 			}
 		],
 		"name": "updateDish",
@@ -756,7 +742,18 @@
 		"type": "function"
 	},
 	{
-		"inputs": [],
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "startIndex",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "count",
+				"type": "uint256"
+			}
+		],
 		"name": "getDishes",
 		"outputs": [
 			{
@@ -778,6 +775,11 @@
 		],
 		"name": "getDishRating",
 		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			},
 			{
 				"internalType": "uint256",
 				"name": "",
@@ -813,11 +815,6 @@
 						"internalType": "string",
 						"name": "supplyDetails",
 						"type": "string"
-					},
-					{
-						"internalType": "bool",
-						"name": "isRegistered",
-						"type": "bool"
 					}
 				],
 				"internalType": "struct GreenDish.RestaurantInfo",
@@ -831,18 +828,23 @@
 	{
 		"inputs": [
 			{
-				"internalType": "uint256",
-				"name": "_dishId",
-				"type": "uint256"
-			},
-			{
 				"internalType": "address",
 				"name": "_user",
 				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_dishId",
+				"type": "uint256"
 			}
 		],
-		"name": "getUserRating",
+		"name": "getUserDishRatings",
 		"outputs": [
+			{
+				"internalType": "uint256[]",
+				"name": "transactionIndices",
+				"type": "uint256[]"
+			},
 			{
 				"components": [
 					{
@@ -859,16 +861,11 @@
 						"internalType": "uint256",
 						"name": "timestamp",
 						"type": "uint256"
-					},
-					{
-						"internalType": "bool",
-						"name": "rewarded",
-						"type": "bool"
 					}
 				],
-				"internalType": "struct GreenDish.Rating",
-				"name": "",
-				"type": "tuple"
+				"internalType": "struct GreenDish.Rating[]",
+				"name": "ratings",
+				"type": "tuple[]"
 			}
 		],
 		"stateMutability": "view",
@@ -910,6 +907,21 @@
 						"internalType": "uint256",
 						"name": "price",
 						"type": "uint256"
+					},
+					{
+						"internalType": "bool",
+						"name": "rated",
+						"type": "bool"
+					},
+					{
+						"internalType": "bool",
+						"name": "ratingRewarded",
+						"type": "bool"
+					},
+					{
+						"internalType": "bool",
+						"name": "purchaseRewarded",
+						"type": "bool"
 					}
 				],
 				"internalType": "struct GreenDish.Transaction[]",
@@ -972,62 +984,6 @@
 				"type": "uint256"
 			}
 		],
-		"name": "purchasedDishes",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "restaurantDeposit",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"name": "restaurantDeposits",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
 		"name": "restaurantDishes",
 		"outputs": [
 			{
@@ -1058,11 +1014,6 @@
 				"internalType": "string",
 				"name": "supplyDetails",
 				"type": "string"
-			},
-			{
-				"internalType": "bool",
-				"name": "isRegistered",
-				"type": "bool"
 			}
 		],
 		"stateMutability": "view",
@@ -1097,17 +1048,17 @@
 	{
 		"inputs": [
 			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			},
-			{
 				"internalType": "address",
 				"name": "",
 				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
 			}
 		],
-		"name": "userRatings",
+		"name": "transactionRatings",
 		"outputs": [
 			{
 				"internalType": "uint256",
@@ -1123,11 +1074,6 @@
 				"internalType": "uint256",
 				"name": "timestamp",
 				"type": "uint256"
-			},
-			{
-				"internalType": "bool",
-				"name": "rewarded",
-				"type": "bool"
 			}
 		],
 		"stateMutability": "view",
@@ -1186,6 +1132,21 @@
 				"internalType": "uint256",
 				"name": "price",
 				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "rated",
+				"type": "bool"
+			},
+			{
+				"internalType": "bool",
+				"name": "ratingRewarded",
+				"type": "bool"
+			},
+			{
+				"internalType": "bool",
+				"name": "purchaseRewarded",
+				"type": "bool"
 			}
 		],
 		"stateMutability": "view",
