@@ -2,12 +2,14 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useWeb3 } from '../context/Web3Context';
 import { Bars3Icon, XMarkIcon } from '@heroicons/react/24/outline';
 
 export default function Navbar() {
     const { connect, disconnect, account, isConnected, isRestaurant } = useWeb3();
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const pathname = usePathname();
 
     const truncateAddress = (address: string) => {
         if (!address) return '';
@@ -149,6 +151,29 @@ export default function Navbar() {
                             </div>
                         )}
                     </div>
+                </div>
+            )}
+
+            {isRestaurant && (
+                <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
+                    <a
+                        href="/restaurant/dashboard"
+                        className={`${pathname === '/restaurant/dashboard'
+                            ? 'border-green-500 text-gray-900'
+                            : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                            } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
+                    >
+                        Dashboard
+                    </a>
+                    <a
+                        href="/restaurant/analytics"
+                        className={`${pathname === '/restaurant/analytics'
+                            ? 'border-green-500 text-gray-900'
+                            : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                            } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
+                    >
+                        Analytics
+                    </a>
                 </div>
             )}
         </nav>

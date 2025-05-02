@@ -31,7 +31,9 @@ export default function Marketplace() {
         setError('');
 
         try {
-            const dishIds = await contract.getDishes();
+            // Get all dish IDs (using new method that returns from startIndex to end)
+            const dishIds = await contract.getDishes(1, 100); // Get up to 100 dishes starting from ID 1
+
             const dishPromises = dishIds.map(async (id: ethers.BigNumber) => {
                 const dishDetails = await contract.getDishDetails(id);
                 return {

@@ -27,8 +27,10 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
     const [comment, setComment] = useState('');
     const [showRating, setShowRating] = useState(false);
     const [purchaseSuccess, setPurchaseSuccess] = useState(false);
-    const [dishRating, setDishRating] = useState<{ average: number, count: number }>({ average: 0, count: 0 });
+    const [dishRating, setDishRating] = useState<{ average: number, count: number, decimal: number }>({ average: 0, count: 0, decimal: 0 });
     const [error, setError] = useState('');
+    const [userTransactions, setUserTransactions] = useState<any[]>([]);
+    const [selectedTransaction, setSelectedTransaction] = useState<number | null>(null);
 
     const fetchDishRating = async () => {
         if (!contract) return;
@@ -37,18 +39,40 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
             const ratingData = await contract.getDishRating(dish.id);
             setDishRating({
                 average: ratingData[0].toNumber(),
-                count: ratingData[1].toNumber()
+                count: ratingData[1].toNumber(),
+                decimal: ratingData[2].toNumber() / 10
             });
         } catch (error) {
             console.error("Error fetching dish rating:", error);
         }
     };
 
+    const fetchUserTransactions = async () => {
+        if (!contract || !account) return;
+
+        try {
+            const txCount = await contract.userTransactionCount(account);
+            if (txCount.toNumber() > 0) {
+                const txs = await contract.getUserTransactions(0, txCount);
+                const dishTxs = txs.filter((tx: any) =>
+                    tx.dishId.toNumber() === dish.id &&
+                    !tx.rated
+                );
+                setUserTransactions(dishTxs);
+            }
+        } catch (error) {
+            console.error("Error fetching user transactions:", error);
+        }
+    };
+
     React.useEffect(() => {
         if (contract && dish.id) {
             fetchDishRating();
+            if (account) {
+                fetchUserTransactions();
+            }
         }
-    }, [contract, dish.id]);
+    }, [contract, dish.id, account]);
 
     const handlePurchase = async () => {
         if (!contract || !account) return;
@@ -58,10 +82,12 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
 
         try {
             const priceInWei = ethers.utils.parseEther(dish.price);
-            const tx = await contract.purchaseDishWithEth(dish.id, { value: priceInWei });
+            const tx = await contract.purchaseDish(dish.id, { value: priceInWei });
             await tx.wait();
             setPurchaseSuccess(true);
             onPurchase();
+            // Refresh user transactions to include the new purchase
+            fetchUserTransactions();
         } catch (error: any) {
             console.error("Error purchasing dish:", error);
             setError(error.message || 'Transaction failed');
@@ -71,22 +97,27 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
     };
 
     const handleRating = async () => {
-        if (!contract || !account) return;
+        if (!contract || !account || selectedTransaction === null) return;
 
         setLoading(true);
         setError('');
 
         try {
-            const tx = await contract.rateDish(dish.id, rating, comment);
+            const tx = await contract.rateDish(dish.id, rating, comment, selectedTransaction);
             await tx.wait();
             setShowRating(false);
             fetchDishRating();
+            fetchUserTransactions();
         } catch (error: any) {
             console.error("Error rating dish:", error);
             setError(error.message || 'Rating failed');
         } finally {
             setLoading(false);
         }
+    };
+
+    const formatDate = (timestamp: number) => {
+        return new Date(timestamp * 1000).toLocaleString();
     };
 
     return (
@@ -110,7 +141,7 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
                             <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path>
                             </svg>
-                            <span className="ml-1 text-sm text-gray-600">{dishRating.average} ({dishRating.count})</span>
+                            <span className="ml-1 text-sm text-gray-600">{dishRating.decimal.toFixed(1)} ({dishRating.count})</span>
                         </div>
                     )}
                 </div>
@@ -127,7 +158,10 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
                             <div className="flex justify-between">
                                 <span className="text-green-600 font-medium">Successfully purchased!</span>
                                 <button
-                                    onClick={() => setShowRating(true)}
+                                    onClick={() => {
+                                        setShowRating(true);
+                                        fetchUserTransactions();
+                                    }}
                                     className="text-sm font-medium text-green-600 hover:text-green-500"
                                 >
                                     Rate dish
@@ -150,6 +184,29 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
                 {showRating && (
                     <div className="mt-4">
                         <h4 className="text-md font-medium mb-2">Rate this dish</h4>
+
+                        {userTransactions.length > 0 ? (
+                            <div className="mb-4">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Select purchase to rate:
+                                </label>
+                                <select
+                                    className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                    value={selectedTransaction === null ? "" : selectedTransaction}
+                                    onChange={(e) => setSelectedTransaction(Number(e.target.value))}
+                                >
+                                    <option value="">Select a purchase</option>
+                                    {userTransactions.map((tx, index) => (
+                                        <option key={index} value={index}>
+                                            {formatDate(tx.timestamp.toNumber())} - {ethers.utils.formatEther(tx.price)} ETH
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        ) : (
+                            <p className="text-sm text-gray-500 mb-4">No unrated purchases found for this dish.</p>
+                        )}
+
                         <div className="flex mb-2">
                             {[1, 2, 3, 4, 5].map((star) => (
                                 <button
@@ -179,7 +236,7 @@ const DishCard: React.FC<DishCardProps> = ({ dish, onPurchase }) => {
                             </button>
                             <button
                                 onClick={handleRating}
-                                disabled={loading || rating === 0}
+                                disabled={loading || rating === 0 || selectedTransaction === null}
                                 className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded text-sm disabled:opacity-50"
                             >
                                 Submit Rating

@@ -10,7 +10,16 @@ interface Transaction {
     timestamp: number;
     carbonCredits: number;
     price: string;
-    dishName?: string; // Added after fetching dish details
+    dishName?: string;
+    rated: boolean;
+    ratingRewarded: boolean;
+    purchaseRewarded: boolean;
+    rating?: {
+        score: number;
+        comment: string;
+        timestamp: number;
+    };
+    transactionIndex?: number;
 }
 
 export default function Profile() {
@@ -41,29 +50,49 @@ export default function Profile() {
             if (transactionCount.toNumber() > 0) {
                 const userTransactions = await contract.getUserTransactions(0, 100); // Get up to 100 transactions
 
-                // For each transaction, fetch the dish details to get the name
-                const transactionsWithDetails = await Promise.all(userTransactions.map(async (tx: any) => {
+                // Process transactions
+                const processedTransactions = await Promise.all(userTransactions.map(async (tx: any, index: number) => {
+                    const dishId = tx.dishId.toNumber();
+
+                    // Get dish details
+                    let dishName = `Dish #${dishId}`;
                     try {
-                        const dishDetails = await contract.getDishDetails(tx.dishId);
-                        return {
-                            dishId: tx.dishId.toNumber(),
-                            timestamp: tx.timestamp.toNumber(),
-                            carbonCredits: tx.carbonCredits.toNumber(),
-                            price: ethers.utils.formatEther(tx.price),
-                            dishName: dishDetails.name
-                        };
+                        const dishDetails = await contract.getDishDetails(dishId);
+                        dishName = dishDetails.name;
                     } catch (error) {
-                        return {
-                            dishId: tx.dishId.toNumber(),
-                            timestamp: tx.timestamp.toNumber(),
-                            carbonCredits: tx.carbonCredits.toNumber(),
-                            price: ethers.utils.formatEther(tx.price),
-                            dishName: `Dish #${tx.dishId.toNumber()}` // Fallback if dish details can't be fetched
-                        };
+                        console.error(`Error fetching dish details for ID ${dishId}:`, error);
                     }
+
+                    // Get rating for this transaction if it exists
+                    let rating = undefined;
+                    if (tx.rated) {
+                        try {
+                            const ratingData = await contract.getTransactionRating(account, index);
+                            rating = {
+                                score: ratingData.score.toNumber(),
+                                comment: ratingData.comment,
+                                timestamp: ratingData.timestamp.toNumber()
+                            };
+                        } catch (error) {
+                            console.error(`Error fetching rating for transaction ${index}:`, error);
+                        }
+                    }
+
+                    return {
+                        dishId,
+                        timestamp: tx.timestamp.toNumber(),
+                        carbonCredits: tx.carbonCredits.toNumber(),
+                        price: ethers.utils.formatEther(tx.price),
+                        dishName,
+                        rated: tx.rated,
+                        ratingRewarded: tx.ratingRewarded,
+                        purchaseRewarded: tx.purchaseRewarded,
+                        rating,
+                        transactionIndex: index
+                    };
                 }));
 
-                setTransactions(transactionsWithDetails);
+                setTransactions(processedTransactions);
             }
         } catch (error: any) {
             console.error("Error fetching user data:", error);
@@ -209,6 +238,9 @@ export default function Profile() {
                                                         <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                             Credits
                                                         </th>
+                                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                            Status
+                                                        </th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="bg-white divide-y divide-gray-200">
@@ -227,6 +259,40 @@ export default function Profile() {
                                                                 <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                                                                     +{tx.carbonCredits}
                                                                 </span>
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                                <div className="flex flex-col space-y-1">
+                                                                    {tx.purchaseRewarded && (
+                                                                        <span className="inline-flex items-center text-xs text-green-600">
+                                                                            <svg className="h-3 w-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                                                            </svg>
+                                                                            Purchase rewarded
+                                                                        </span>
+                                                                    )}
+
+                                                                    {tx.rated ? (
+                                                                        <div>
+                                                                            <span className="inline-flex items-center text-xs text-blue-600">
+                                                                                <svg className="h-3 w-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                                                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                                                                </svg>
+                                                                                Rated ({tx.rating?.score}/5)
+                                                                            </span>
+
+                                                                            {tx.ratingRewarded && (
+                                                                                <span className="inline-flex items-center text-xs text-green-600 ml-2">
+                                                                                    <svg className="h-3 w-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                                                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                                                                    </svg>
+                                                                                    Rating rewarded
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <span className="text-xs text-gray-400">Not rated</span>
+                                                                    )}
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     ))}

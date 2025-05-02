@@ -169,8 +169,9 @@ contract GreenDish {
             !verifiedRestaurants[msg.sender],
             "Restaurant already registered"
         );
-        require(msg.value >= entryFee, "Insufficient registration fee");
+        require(msg.value >= entryFee, "Insufficient fee");
         require(bytes(_supplyDetails).length > 0, "Supply details required");
+
         verifiedRestaurants[msg.sender] = true;
         restaurantInfo[msg.sender] = RestaurantInfo({
             supplySource: _supplySource,

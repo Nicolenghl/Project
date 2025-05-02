@@ -12,6 +12,7 @@ async function main() {
 
     // Deploy the contract
     const greenDish = await GreenDish.deploy(entryFee, initialSupply);
+    
 
     // Wait for the contract to be deployed
     await greenDish.deployed();
