@@ -185,7 +185,7 @@ contract GreenDish {
         string memory _mainComponent,
         uint _carbonCredits,
         uint _price
-    ) external onlyVerifiedRestaurant {
+    ) external onlyVerifiedRestaurant nonReentrant {
         require(bytes(_name).length > 0, "Name required");
         require(bytes(_mainComponent).length > 0, "Main component required");
         require(_price > 0, "Price must be greater than 0");
