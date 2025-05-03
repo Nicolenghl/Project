@@ -14,9 +14,15 @@ contract GreenDish {
 
     // Max purchases to track per customer
     mapping(uint => Dish) public dishes;
-    mapping(address => uint[]) public restaurantDishes;
-    mapping(address => bool) public verifiedRestaurants;
-    mapping(address => RestaurantInfo) public restaurantInfo;
+    struct Restaurant {
+        bool isVerified;
+        string name;
+        SupplySource supplySource;
+        string supplyDetails;
+        uint registrationTimestamp;
+        uint[] dishIds;
+    }
+    mapping(address => Restaurant) public restaurants;
     mapping(uint => DishRatingInfo) public dishRatings;
     // Store ratings per transaction instead of per dish/user
     mapping(address => mapping(uint => Rating)) public transactionRatings; // user -> transactionIndex -> Rating
@@ -41,11 +47,6 @@ contract GreenDish {
         OTHER
     }
 
-    struct RestaurantInfo {
-        SupplySource supplySource;
-        string supplyDetails;
-    }
-
     struct Dish {
         string name;
         string mainComponent;
@@ -53,7 +54,6 @@ contract GreenDish {
         uint price;
         address restaurant;
         bool isActive;
-        bool isVerified;
     }
 
     struct Rating {
@@ -73,14 +73,19 @@ contract GreenDish {
         uint transactionCount;
     }
 
+    enum TransactionStatus {
+        CREATED,
+        PURCHASE_REWARDED,
+        RATED,
+        RATING_REWARDED
+    }
+
     struct Transaction {
         uint dishId;
         uint timestamp;
         uint carbonCredits;
         uint price;
-        bool rated;
-        bool ratingRewarded;
-        bool purchaseRewarded;
+        TransactionStatus status;
     }
 
     // =============== EVENTS =============== //
@@ -103,6 +108,7 @@ contract GreenDish {
     );
     event RestaurantRegistered(
         address indexed restaurant,
+        string name,
         SupplySource supplySource
     );
     event DishRated(uint indexed dishId, address indexed customer, uint score);
@@ -138,13 +144,8 @@ contract GreenDish {
         _;
     }
 
-    modifier onlyDishOwner(uint _dishId) {
-        require(dishes[_dishId].restaurant == msg.sender, "Not dish owner");
-        _;
-    }
-
     modifier onlyVerifiedRestaurant() {
-        require(verifiedRestaurants[msg.sender], "Not verified");
+        require(restaurants[msg.sender].isVerified, "Not verified");
         _;
     }
 
@@ -161,51 +162,61 @@ contract GreenDish {
     }
 
     // =============== RESTAURANT FUNCTIONS =============== //
-    function registerRestaurant(
+    function restaurantRegister(
+        string memory _name,
         SupplySource _supplySource,
-        string memory _supplyDetails
-    ) external payable {
+        string memory _supplyDetails,
+        // First dish parameters
+        string memory _dishName,
+        string memory _dishMainComponent,
+        uint _dishCarbonCredits,
+        uint _dishPrice
+    ) external payable nonReentrant {
+        // Basic restaurant registration checks
         require(
-            !verifiedRestaurants[msg.sender],
+            !restaurants[msg.sender].isVerified,
             "Restaurant already registered"
         );
         require(msg.value >= entryFee, "Insufficient fee");
+        require(bytes(_name).length > 0, "Restaurant name required");
         require(bytes(_supplyDetails).length > 0, "Supply details required");
 
-        verifiedRestaurants[msg.sender] = true;
-        restaurantInfo[msg.sender] = RestaurantInfo({
+        // Verify first dish parameters
+        require(bytes(_dishName).length > 0, "Dish name required");
+        require(
+            bytes(_dishMainComponent).length > 0,
+            "Dish main component required"
+        );
+        require(_dishPrice > 0, "Dish price must be greater than 0");
+        require(
+            _dishCarbonCredits > 0 && _dishCarbonCredits <= 100,
+            "Invalid dish carbon credits"
+        );
+
+        // Register restaurant - all state updates for restaurant happen here
+        restaurants[msg.sender] = Restaurant({
+            isVerified: true,
+            name: _name,
             supplySource: _supplySource,
-            supplyDetails: _supplyDetails
+            supplyDetails: _supplyDetails,
+            registrationTimestamp: block.timestamp,
+            dishIds: new uint[](0) // Initialize empty array
         });
 
-        emit RestaurantRegistered(msg.sender, _supplySource);
-    }
-
-    function registerDish(
-        string memory _name,
-        string memory _mainComponent,
-        uint _carbonCredits,
-        uint _price
-    ) external onlyVerifiedRestaurant nonReentrant {
-        require(bytes(_name).length > 0, "Name required");
-        require(bytes(_mainComponent).length > 0, "Main component required");
-        require(_price > 0, "Price must be greater than 0");
-        require(_carbonCredits > 0 && _carbonCredits <= 100, "Invalid credits");
-
+        // Register first dish automatically
         dishCounter++;
         uint dishId = dishCounter;
 
         dishes[dishId] = Dish({
-            name: _name,
-            mainComponent: _mainComponent,
-            carbonCredits: _carbonCredits,
-            price: _price,
+            name: _dishName,
+            mainComponent: _dishMainComponent,
+            carbonCredits: _dishCarbonCredits,
+            price: _dishPrice,
             restaurant: msg.sender,
-            isActive: true,
-            isVerified: true
+            isActive: true
         });
 
-        restaurantDishes[msg.sender].push(dishId);
+        restaurants[msg.sender].dishIds.push(dishId);
 
         // Initialize rating info for the dish
         dishRatings[dishId] = DishRatingInfo({
@@ -214,25 +225,130 @@ contract GreenDish {
             rewardedRatings: 0
         });
 
-        emit DishRegistered(dishId, msg.sender, _name);
+        emit RestaurantRegistered(msg.sender, _name, _supplySource);
+        emit DishRegistered(dishId, msg.sender, _dishName);
+
+        uint excess = msg.value - entryFee;
+        if (excess > 0) {
+            payable(msg.sender).transfer(excess);
+        }
     }
 
-    function updateDish(
-        uint _dishId,
+    function addDish(
+        string memory _name,
+        string memory _mainComponent,
+        uint _carbonCredits,
         uint _price,
         bool _isActive
-    ) external onlyDishOwner(_dishId) {
-        Dish storage dish = dishes[_dishId];
-        dish.price = _price;
-        dish.isActive = _isActive;
+    ) external onlyVerifiedRestaurant nonReentrant {
+        // Verify dish parameters
+        require(bytes(_name).length > 0, "Name required");
+        require(bytes(_mainComponent).length > 0, "Main component required");
+        require(_price > 0, "Price must be greater than 0");
+        require(_carbonCredits > 0 && _carbonCredits <= 100, "Invalid credits");
 
-        emit DishUpdated(_dishId, msg.sender, _isActive, _price);
+        // Register the new dish
+        dishCounter++;
+        uint newDishId = dishCounter;
+
+        dishes[newDishId] = Dish({
+            name: _name,
+            mainComponent: _mainComponent,
+            carbonCredits: _carbonCredits,
+            price: _price,
+            restaurant: msg.sender,
+            isActive: _isActive
+        });
+
+        restaurants[msg.sender].dishIds.push(newDishId);
+
+        // Initialize rating info
+        dishRatings[newDishId] = DishRatingInfo({
+            totalRatings: 0,
+            ratingSum: 0,
+            rewardedRatings: 0
+        });
+
+        emit DishRegistered(newDishId, msg.sender, _name);
+    }
+
+    function manageDish(
+        uint _dishId,
+        string memory _name,
+        string memory _mainComponent,
+        uint _carbonCredits,
+        uint _price,
+        bool _isActive,
+        bool _isDeactivateOnly
+    ) external onlyVerifiedRestaurant nonReentrant validDish(_dishId) {
+        // Verify ownership
+        require(dishes[_dishId].restaurant == msg.sender, "Not dish owner");
+
+        Dish storage dish = dishes[_dishId];
+
+        if (_isDeactivateOnly) {
+            // Only handle deactivation
+            require(dish.isActive, "Dish already inactive");
+            dish.isActive = false;
+        } else {
+            // Full update
+            require(bytes(_name).length > 0, "Name required");
+            require(
+                bytes(_mainComponent).length > 0,
+                "Main component required"
+            );
+            require(_price > 0, "Price must be greater than 0");
+            require(
+                _carbonCredits > 0 && _carbonCredits <= 100,
+                "Invalid credits"
+            );
+
+            dish.name = _name;
+            dish.mainComponent = _mainComponent;
+            dish.carbonCredits = _carbonCredits;
+            dish.price = _price;
+            dish.isActive = _isActive;
+        }
+
+        emit DishUpdated(_dishId, msg.sender, dish.isActive, dish.price);
     }
 
     function getRestaurantInfo(
         address _restaurant
-    ) external view returns (RestaurantInfo memory) {
-        return restaurantInfo[_restaurant];
+    )
+        external
+        view
+        returns (
+            Restaurant memory info,
+            uint[] memory dishIds,
+            Dish[] memory dishDetails
+        )
+    {
+        // First get the restaurant info
+        info = restaurants[_restaurant];
+
+        // Check if restaurant exists and is verified
+        if (!info.isVerified) {
+            return (info, new uint[](0), new Dish[](0));
+        }
+
+        // Get all dishes for this restaurant - now we know restaurant exists and is verified
+        dishIds = info.dishIds;
+
+        if (dishIds.length == 0) {
+            // Return empty arrays if restaurant has no dishes
+            return (info, dishIds, new Dish[](0));
+        }
+
+        // Create arrays to hold dish details
+        dishDetails = new Dish[](dishIds.length);
+
+        // Fill arrays with dish information
+        for (uint i = 0; i < dishIds.length; i++) {
+            dishDetails[i] = dishes[dishIds[i]];
+        }
+
+        return (info, dishIds, dishDetails);
     }
 
     // =============== CUSTOMER FUNCTIONS =============== //
